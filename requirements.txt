@@ -1,0 +1,8 @@
+fastapi
+uvicorn 
+torch 
+transformers 
+huggingface_hub 
+python-multipart
+git+https://github.com/huggingface/transformers
+librosa
