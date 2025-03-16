@@ -2,7 +2,6 @@ from datetime import datetime
 import logging
 import os
 import torch
-import io
 import uvicorn
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -61,7 +60,7 @@ def load_pipeline():
     if asr_pipeline is not None:
         return  # Already loaded
     
-    cache_dir = load_model_files()
+    load_model_files()  # This function downloads the model files but is not directly used in pipeline()
     device = 0 if torch.cuda.is_available() else "cpu"
     
     logging.info(f"Loading ASR pipeline on device: {device}")
@@ -69,9 +68,9 @@ def load_pipeline():
         task="automatic-speech-recognition",
         model=MODEL_NAME,
         chunk_length_s=30,
-        device=device,
-        cache_dir=cache_dir
+        device=device
     )
+    asr_pipeline.model.generation_config.forced_decoder_ids = None
     logging.info("ASR pipeline loaded successfully.")
 
 @app.get("/")
@@ -91,8 +90,7 @@ async def transcribe(file: UploadFile = File(...), language: str = "th", task: s
     
     try:
         # Read audio file from request
-        content = await file.read()
-        audio_data = io.BytesIO(content)
+        audio_data = await file.read()
         
         # Process the audio file
         result = asr_pipeline(
@@ -119,6 +117,32 @@ async def stt(file: UploadFile = File(...), request: STTRequest = None):
         request = STTRequest()
         
     return await transcribe(file, request.language, request.task)
+
+@app.post("/v1/audio/transcriptions")
+async def whisper_openai(file: UploadFile = File(...)):
+    """Whisper OpenAI-compatible endpoint."""
+    
+    if asr_pipeline is None:
+        raise HTTPException(status_code=500, detail="ASR pipeline not loaded.")
+    
+    logging.info(f"Received Whisper-compatible audio file: {file.filename}")
+    start_time = datetime.now()
+    
+    try:
+        audio_data = await file.read()
+        # audio_data = io.BytesIO(content)
+        
+        result = asr_pipeline(audio_data, generate_kwargs={"language":"<|th|>", "task":"transcribe"}, batch_size=16)
+        
+        duration = (datetime.now() - start_time).total_seconds()
+        logging.info(f"Whisper transcription completed in {duration:.2f} seconds.")
+        
+        return {
+            "text": result["text"]
+        }
+    except Exception as e:
+        logging.error(f"Error transcribing Whisper audio: {e}")
+        raise HTTPException(status_code=500, detail=f"Whisper STT processing failed: {e}")
 
 if __name__ == "__main__":
     load_pipeline()  # Load pipeline once
